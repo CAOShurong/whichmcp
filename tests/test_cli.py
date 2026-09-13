@@ -124,3 +124,31 @@ def test_empty_tree(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.setenv("WHICHHMCP_HOME", str(tmp_path / "empty-home"))
     assert main([str(tmp_path)]) == 0
     assert "0 files" in capsys.readouterr().out
+
+
+def test_project_under_home_keeps_repo_relative_path(tmp_path: Path):
+    home = tmp_path / "home"
+    proj = home / "proj"
+    proj.mkdir(parents=True)
+    (proj / ".git").mkdir()
+    _write(proj / ".mcp.json", MCP)
+    hits = scan(proj, home=home)
+    assert hits[0].display == ".mcp.json"
+    text = render(hits)
+    assert "copy servers into .cursor/mcp.json" in text
+    assert "~/proj/" not in text
+
+
+def test_gemini_settings_without_mcp_is_skipped(tmp_path: Path):
+    (tmp_path / ".git").mkdir()
+    _write(tmp_path / ".gemini" / "settings.json", '{"theme": "dark"}\n')
+    hits = scan(tmp_path, home=tmp_path / "no-home")
+    assert hits == []
+
+
+def test_empty_mcp_json_is_listed(tmp_path: Path):
+    (tmp_path / ".git").mkdir()
+    _write(tmp_path / ".mcp.json", "{}\n")
+    hits = scan(tmp_path, home=tmp_path / "no-home")
+    assert len(hits) == 1
+    assert "empty" in render(hits)

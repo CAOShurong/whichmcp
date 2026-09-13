@@ -64,16 +64,22 @@ def _walk_dirs(start: Path) -> list[Path]:
     return out
 
 
-def _rel(path: Path, git_root: Path, home: Path) -> str:
-    try:
-        path.relative_to(home)
-        return "~/" + path.relative_to(home).as_posix()
-    except ValueError:
-        pass
+def _rel(path: Path, git_root: Path, home: Path, from_home: bool) -> str:
+    # User-level files always print as ~/. Project files stay git-root
+    # relative even when the repo lives under the user's home (Windows).
+    if from_home:
+        try:
+            return "~/" + path.relative_to(home).as_posix()
+        except ValueError:
+            return path.as_posix()
     try:
         return path.relative_to(git_root).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def _dedicated(rel: str) -> bool:
+    return Path(rel).name in {".mcp.json", "mcp.json"}
 
 
 def _strip_bom(text: str) -> str:
@@ -184,14 +190,21 @@ def _servers_from_toml(text: str) -> list[Server]:
     return [Server(name=n, transport="stdio") for n in names if n]
 
 
-def _collect(path: Path, loaders: str, git_root: Path, home: Path) -> Hit | None:
+def _collect(
+    path: Path,
+    loaders: str,
+    git_root: Path,
+    home: Path,
+    dedicated: bool,
+    from_home: bool = False,
+) -> Hit | None:
     if not path.is_file():
         return None
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    display = _rel(path.resolve(), git_root, home)
+    display = _rel(path.resolve(), git_root, home, from_home)
     notes: list[str] = []
     if path.suffix.lower() == ".toml" or path.name.endswith(".toml"):
         servers = _servers_from_toml(text)
@@ -199,6 +212,8 @@ def _collect(path: Path, loaders: str, git_root: Path, home: Path) -> Hit | None
     else:
         obj = _load_json(text)
         if obj is None:
+            if not dedicated:
+                return None
             return Hit(
                 path=path.resolve(),
                 display=display,
@@ -211,6 +226,8 @@ def _collect(path: Path, loaders: str, git_root: Path, home: Path) -> Hit | None
         parse_error = False
         if isinstance(obj, dict) and not servers:
             notes.append("empty")
+    if not dedicated and not servers:
+        return None
     return Hit(
         path=path.resolve(),
         display=display,
@@ -236,9 +253,27 @@ def scan(start: Path, home: Path | None = None) -> list[Hit]:
 
     for directory in _walk_dirs(start):
         for rel, loaders in PROJECT_FILES:
-            add(_collect(directory / rel, loaders, git_root, home_path))
+            add(
+                _collect(
+                    directory / rel,
+                    loaders,
+                    git_root,
+                    home_path,
+                    _dedicated(rel),
+                    from_home=False,
+                )
+            )
     for rel, loaders in HOME_FILES:
-        add(_collect(home_path / rel, loaders, git_root, home_path))
+        add(
+            _collect(
+                home_path / rel,
+                loaders,
+                git_root,
+                home_path,
+                _dedicated(rel),
+                from_home=True,
+            )
+        )
     return hits
 
 
